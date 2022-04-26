@@ -312,6 +312,18 @@
         (assoc k (try-build-action system f k v'))
         (vary-meta assoc-in [::build k] v'))))
 
+
+(defn- relevant-keys [config keys]
+  (let [relevant-keys   (dependent-keys config keys)
+        relevant-config (select-keys config relevant-keys)]
+    (when-let [invalid-key (first (invalid-composite-keys config))]
+      (throw (invalid-composite-key-exception config invalid-key)))
+    (when-let [ref (first (ambiguous-refs relevant-config))]
+      (throw (ambiguous-key-exception config ref (map key (find-derived config ref)))))
+    (when-let [refs (seq (missing-refs relevant-config))]
+      (throw (missing-refs-exception config refs)))
+    relevant-keys))
+
 (defn build
   "Apply a function f to each key value pair in a configuration map. Keys are
   traversed in dependency order, and any references in the value expanded. The
@@ -324,14 +336,7 @@
    (build config keys f assertf (fn [_ v] v)))
   ([config keys f assertf resolvef]
    {:pre [(map? config)]}
-   (let [relevant-keys   (dependent-keys config keys)
-         relevant-config (select-keys config relevant-keys)]
-     (when-let [invalid-key (first (invalid-composite-keys config))]
-       (throw (invalid-composite-key-exception config invalid-key)))
-     (when-let [ref (first (ambiguous-refs relevant-config))]
-       (throw (ambiguous-key-exception config ref (map key (find-derived config ref)))))
-     (when-let [refs (seq (missing-refs relevant-config))]
-       (throw (missing-refs-exception config refs)))
+   (let [relevant-keys (relevant-keys config keys)]
      (reduce (partial build-key f assertf resolvef)
              (with-meta {} {::origin config})
              (map (fn [k] [k (config k)]) relevant-keys)))))

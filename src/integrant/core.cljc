@@ -6,7 +6,10 @@
             [clojure.set :as set]
             [clojure.spec.alpha :as s]
             [clojure.string :as str]
-            [weavejester.dependency :as dep]))
+            [weavejester.dependency :as dep])
+  #?(:cljs
+     (:require [cljs.core.async :as async]
+               [cljs.core.async.interop :refer-macros [<p!]])))
 
 (defprotocol RefLike
   (ref-key [r] "Return the key of the reference.")
@@ -339,7 +342,27 @@
    (let [relevant-keys (relevant-keys config keys)]
      (reduce (partial build-key f assertf resolvef)
              (with-meta {} {::origin config})
-             (map (fn [k] [k (config k)]) relevant-keys)))))
+             (map (fn [k] [k (config k)]) relevant-keys))))
+  ([config keys f assertf resolvef resolve reject]
+   {:pre [(map? config)]}
+   (try
+     #?(:cljs
+        (let [relevant-keys (relevant-keys config keys)]
+          (async/go-loop [k-v-seq (map (fn [k] [k (config k)]) relevant-keys)
+                         system (with-meta {} {::origin config})]
+           (let [[k v]   (first k-v-seq)
+                 system' (build-key f assertf resolvef system [k v])
+                 v'      (get system' k)
+                 ;; if v' is a promise then resolve it
+                 v''     #?(:clj v'
+                            :cljs (if (= js/Promise (type v')) (<p! v') v'))
+                 ;; then we overwrite the system value for the same key with the new resolved value
+                 system''  (assoc system' k v'')]
+             (if-let [k-v-seq (seq (next k-v-seq))]
+               (recur k-v-seq system'')
+               (resolve system''))))))
+     (catch #?(:clj Throwable :cljs :default) t
+       (reject t)))))
 
 (defmulti resolve-key
   "Return a value to substitute for a reference prior to initiation. By default
